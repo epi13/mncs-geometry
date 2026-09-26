@@ -1,0 +1,315 @@
+mncs 0.18;
+
+// Native contracts for mncs.geometry (2D f64 slice), executed through
+// `mncs test`. Every expectation is an in-language assertion; the
+// comparison discipline is exact `==` where binary64 arithmetic on
+// the chosen inputs is exact, and library `approx` (via the
+// point_approx/vec_approx helpers with explicit tolerances) where an
+// algorithm rounds (Newton square roots, trigonometry, 1/3-style
+// projections).
+
+module mncs.geometry.test.geometry2d.v1;
+
+use mncs.test.assertions;
+use mncs.test.suite;
+use mncs.test.generative;
+use mncs.geometry.point2;
+use mncs.geometry.bounds2;
+use mncs.geometry.segment2;
+use mncs.geometry.transform2;
+use mncs.numerics.scalar_float;
+
+// --- point/vector semantics ---
+
+test point_minus_point_is_vector() -> (result: TestResult) {
+    let d: Vec2 = sub_points(point2(3.0, 4.0), point2(1.0, 1.0));
+    return from_assertion(equals_bool(true, d.x == 2.0 && d.y == 3.0, 3001));
+}
+
+test point_plus_vector_round_trip() -> (result: TestResult) {
+    let p: Point2 = point2(3.0, 4.0);
+    let v: Vec2 = vec2(1.0, -2.0);
+    let q: Point2 = add_point_vec(p, v);
+    let back: Point2 = add_point_vec(q, vec_neg(v));
+    return from_assertion(equals_bool(true, back.x == p.x && back.y == p.y, 3002));
+}
+
+test vec_algebra() -> (result: TestResult) {
+    let v: Vec2 = vec2(1.0, 2.0);
+    let w: Vec2 = vec2(3.0, 4.0);
+    let s: Vec2 = vec_add(v, w);
+    let d: Vec2 = vec_sub(w, v);
+    let n: Vec2 = vec_neg(v);
+    let k: Vec2 = vec_scale(v, 2.0);
+    let z: Vec2 = zero_vec();
+    let ok: bool = s.x == 4.0 && s.y == 6.0 && d.x == 2.0 && d.y == 2.0;
+    let ok2: bool = n.x == -1.0 && n.y == -2.0 && k.x == 2.0 && k.y == 4.0;
+    let ident: bool = vec_add(v, z).x == v.x && vec_sub(v, v).x == 0.0;
+    return from_assertion(equals_bool(true, ok && ok2 && ident, 3003));
+}
+
+test dot_cross_values() -> (result: TestResult) {
+    let d: bool = dot(vec2(1.0, 2.0), vec2(3.0, 4.0)) == 11.0;
+    let ccw: bool = cross(vec2(1.0, 0.0), vec2(0.0, 1.0)) == 1.0;
+    let cw: bool = cross(vec2(0.0, 1.0), vec2(1.0, 0.0)) == -1.0;
+    return from_assertion(equals_bool(true, d && ccw && cw, 3004));
+}
+
+test length_squared_exact() -> (result: TestResult) {
+    let l2: bool = length2(vec2(3.0, 4.0)) == 25.0;
+    let d2: bool = distance2(point2(0.0, 0.0), point2(3.0, 4.0)) == 25.0;
+    let self_dist: bool = distance2(point2(1.0, 2.0), point2(1.0, 2.0)) == 0.0;
+    return from_assertion(equals_bool(true, l2 && d2 && self_dist, 3005));
+}
+
+test length_and_normalize() -> (result: TestResult) {
+    let len: bool = approx(length(vec2(3.0, 4.0)), 5.0, 0.000000000001, 0.0);
+    let unit: bool = match normalize(vec2(3.0, 4.0)) {
+        Norm2.Value { vec } => vec_approx(vec, vec2(0.6, 0.8), 0.000000000001, 0.000000000001),
+        Norm2.Degenerate => false,
+    };
+    let degen: bool = match normalize(zero_vec()) {
+        Norm2.Value { vec } => vec.x != vec.x,
+        Norm2.Degenerate => true,
+    };
+    return from_assertion(equals_bool(true, len && unit && degen, 3006));
+}
+
+test point_approx_tiers() -> (result: TestResult) {
+    let near: bool = point_approx(point2(1.0, 2.0), point2(1.0000001, 2.0), 0.001, 0.0);
+    let far: bool = point_approx(point2(1.0, 2.0), point2(1.1, 2.0), 0.001, 0.0) == false;
+    return from_assertion(equals_bool(true, near && far, 3007));
+}
+
+// --- bounds ---
+
+test bounds_construction_validates() -> (result: TestResult) {
+    let valid: bool = match make_bounds(point2(0.0, 0.0), point2(2.0, 3.0)) {
+        OptBounds.Box { bounds } => bounds.hi.x == 2.0 && bounds.hi.y == 3.0,
+        OptBounds.Empty => false,
+    };
+    let inverted: bool = match make_bounds(point2(2.0, 0.0), point2(0.0, 3.0)) {
+        OptBounds.Box { bounds } => bounds.lo.x != bounds.lo.x,
+        OptBounds.Empty => true,
+    };
+    let single: Bounds2 = point_bounds(point2(1.0, 1.0));
+    let point_box: bool = bounds_area(single) == 0.0;
+    return from_assertion(equals_bool(true, valid && inverted && point_box, 3008));
+}
+
+test bounds_containment_inclusive() -> (result: TestResult) {
+    let b: Bounds2 = Bounds2 { lo: point2(0.0, 0.0), hi: point2(2.0, 2.0) };
+    let inside: bool = contains(b, point2(1.0, 1.0));
+    let edge: bool = contains(b, point2(2.0, 0.0));
+    let outside: bool = contains(b, point2(2.0000001, 1.0)) == false;
+    return from_assertion(equals_bool(true, inside && edge && outside, 3009));
+}
+
+test bounds_union_intersect() -> (result: TestResult) {
+    let a: Bounds2 = Bounds2 { lo: point2(0.0, 0.0), hi: point2(2.0, 2.0) };
+    let b: Bounds2 = Bounds2 { lo: point2(1.0, 1.0), hi: point2(3.0, 4.0) };
+    let u: Bounds2 = bounds_union(a, b);
+    let un: bool = u.lo.x == 0.0 && u.hi.x == 3.0 && u.hi.y == 4.0;
+    let it: bool = match bounds_intersect(a, b) {
+        OptBounds.Box { bounds } => bounds.lo.x == 1.0 && bounds.hi.x == 2.0 && bounds.hi.y == 2.0,
+        OptBounds.Empty => false,
+    };
+    let c: Bounds2 = Bounds2 { lo: point2(5.0, 5.0), hi: point2(6.0, 6.0) };
+    let disjoint: bool = match bounds_intersect(a, c) {
+        OptBounds.Box { bounds } => bounds.lo.x != bounds.lo.x,
+        OptBounds.Empty => true,
+    };
+    return from_assertion(equals_bool(true, un && it && disjoint, 3010));
+}
+
+test bounds_measure_translate() -> (result: TestResult) {
+    let b: Bounds2 = Bounds2 { lo: point2(0.0, 0.0), hi: point2(4.0, 2.0) };
+    let area: bool = bounds_area(b) == 8.0;
+    let center: Point2 = bounds_center(b);
+    let ce: bool = center.x == 2.0 && center.y == 1.0;
+    let ext: Vec2 = bounds_extent(b);
+    let ex: bool = ext.x == 4.0 && ext.y == 2.0;
+    let moved: Bounds2 = bounds_translate(b, vec2(1.0, 1.0));
+    let mo: bool = moved.lo.x == 1.0 && moved.hi.y == 3.0;
+    return from_assertion(equals_bool(true, area && ce && ex && mo, 3011));
+}
+
+// --- orientation ---
+
+test orient_classifies() -> (result: TestResult) {
+    let ccw: bool = match orient(point2(0.0, 0.0), point2(1.0, 0.0), point2(0.0, 1.0)) {
+        Orient.Ccw => true,
+        Orient.Cw => false,
+        Orient.Collinear => false,
+    };
+    let cw: bool = match orient(point2(0.0, 0.0), point2(1.0, 0.0), point2(0.0, -1.0)) {
+        Orient.Ccw => false,
+        Orient.Cw => true,
+        Orient.Collinear => false,
+    };
+    let col: bool = match orient(point2(0.0, 0.0), point2(1.0, 1.0), point2(2.0, 2.0)) {
+        Orient.Ccw => false,
+        Orient.Cw => false,
+        Orient.Collinear => true,
+    };
+    return from_assertion(equals_bool(true, ccw && cw && col, 3012));
+}
+
+test orient_near_degenerate_uses_computed_sign() -> (result: TestResult) {
+    // 1e-16 is representable push-off-axis: the predicate reports the
+    // computed sign (Ccw), not an epsilon-band verdict.
+    let tiny: bool = match orient(point2(0.0, 0.0), point2(1.0, 0.0), point2(2.0, 0.0000000000000001)) {
+        Orient.Ccw => true,
+        Orient.Cw => false,
+        Orient.Collinear => false,
+    };
+    return from_assertion(equals_bool(true, tiny, 3013));
+}
+
+// --- segment intersection ---
+
+test segments_cross_at_point() -> (result: TestResult) {
+    let s: Segment2 = segment(point2(0.0, 0.0), point2(2.0, 2.0));
+    let t: Segment2 = segment(point2(0.0, 2.0), point2(2.0, 0.0));
+    let hit: bool = match seg_intersect(s, t) {
+        SegIntersect.Point { p } => p.x == 1.0 && p.y == 1.0,
+        SegIntersect.Overlap { a, b } => false,
+        SegIntersect.None => false,
+    };
+    return from_assertion(equals_bool(true, hit, 3014));
+}
+
+test parallel_disjoint_is_none() -> (result: TestResult) {
+    let s: Segment2 = segment(point2(0.0, 0.0), point2(2.0, 0.0));
+    let t: Segment2 = segment(point2(0.0, 1.0), point2(2.0, 1.0));
+    let none: bool = match seg_intersect(s, t) {
+        SegIntersect.Point { p } => false,
+        SegIntersect.Overlap { a, b } => false,
+        SegIntersect.None => true,
+    };
+    return from_assertion(equals_bool(true, none, 3015));
+}
+
+test endpoint_touch_is_point() -> (result: TestResult) {
+    let s: Segment2 = segment(point2(0.0, 0.0), point2(2.0, 0.0));
+    let t: Segment2 = segment(point2(2.0, 0.0), point2(4.0, 0.0));
+    let hit: bool = match seg_intersect(s, t) {
+        SegIntersect.Point { p } => p.x == 2.0 && p.y == 0.0,
+        SegIntersect.Overlap { a, b } => false,
+        SegIntersect.None => false,
+    };
+    return from_assertion(equals_bool(true, hit, 3016));
+}
+
+test collinear_overlap_reports_interval() -> (result: TestResult) {
+    let s: Segment2 = segment(point2(0.0, 0.0), point2(4.0, 0.0));
+    let t: Segment2 = segment(point2(2.0, 0.0), point2(6.0, 0.0));
+    let hit: bool = match seg_intersect(s, t) {
+        SegIntersect.Point { p } => false,
+        SegIntersect.Overlap { a, b } => a.x == 2.0 && b.x == 4.0 && a.y == 0.0,
+        SegIntersect.None => false,
+    };
+    return from_assertion(equals_bool(true, hit, 3017));
+}
+
+test collinear_disjoint_is_none() -> (result: TestResult) {
+    let s: Segment2 = segment(point2(0.0, 0.0), point2(1.0, 0.0));
+    let t: Segment2 = segment(point2(2.0, 0.0), point2(3.0, 0.0));
+    let none: bool = match seg_intersect(s, t) {
+        SegIntersect.Point { p } => false,
+        SegIntersect.Overlap { a, b } => false,
+        SegIntersect.None => true,
+    };
+    return from_assertion(equals_bool(true, none, 3018));
+}
+
+test degenerate_segment_meets_as_point() -> (result: TestResult) {
+    let s: Segment2 = segment(point2(1.0, 1.0), point2(1.0, 1.0));
+    let t: Segment2 = segment(point2(0.0, 0.0), point2(2.0, 2.0));
+    let degen: bool = is_degenerate(s) && !is_degenerate(t);
+    let hit: bool = match seg_intersect(s, t) {
+        SegIntersect.Point { p } => p.x == 1.0 && p.y == 1.0,
+        SegIntersect.Overlap { a, b } => false,
+        SegIntersect.None => false,
+    };
+    let off: Segment2 = segment(point2(5.0, 5.0), point2(5.0, 5.0));
+    let miss: bool = match seg_intersect(off, t) {
+        SegIntersect.Point { p } => false,
+        SegIntersect.Overlap { a, b } => false,
+        SegIntersect.None => true,
+    };
+    return from_assertion(equals_bool(true, degen && hit && miss, 3019));
+}
+
+test point_segment_distance_exact() -> (result: TestResult) {
+    let a: Point2 = point2(0.0, 0.0);
+    let b: Point2 = point2(4.0, 0.0);
+    let mid: bool = point_segment_distance2(a, b, point2(1.0, 2.0)) == 4.0;
+    let clamp: bool = point_segment_distance2(a, b, point2(5.0, 1.0)) == 2.0;
+    let degen: bool = point_segment_distance2(a, a, point2(3.0, 4.0)) == 25.0;
+    return from_assertion(equals_bool(true, mid && clamp && degen, 3020));
+}
+
+// --- transforms ---
+
+test identity_and_translate() -> (result: TestResult) {
+    let p: Point2 = point2(1.0, 2.0);
+    let id: Point2 = apply_point(identity(), p);
+    let same: bool = id.x == 1.0 && id.y == 2.0;
+    let moved: Point2 = apply_point(translate(vec2(3.0, -1.0)), p);
+    let mo: bool = moved.x == 4.0 && moved.y == 1.0;
+    // Translation never moves a displacement.
+    let v: Vec2 = apply_vec(translate(vec2(3.0, -1.0)), vec2(1.0, 1.0));
+    let disp: bool = v.x == 1.0 && v.y == 1.0;
+    return from_assertion(equals_bool(true, same && mo && disp, 3021));
+}
+
+test scale_and_rotate() -> (result: TestResult) {
+    let p: Point2 = point2(1.0, 2.0);
+    let s: Point2 = apply_point(scale(2.0, 3.0), p);
+    let sc: bool = s.x == 2.0 && s.y == 6.0;
+    let r: Point2 = apply_point(rotate(1.5707963267948966), point2(1.0, 0.0));
+    let ro: bool = point_approx(r, point2(0.0, 1.0), 0.000000000001, 0.000000000001);
+    let d: bool = det(scale(2.0, 3.0)) == 6.0;
+    return from_assertion(equals_bool(true, sc && ro && d, 3022));
+}
+
+test compose_and_inverse() -> (result: TestResult) {
+    let t: Affine2 = compose(translate(vec2(1.0, 1.0)), scale(2.0, 2.0));
+    let p: Point2 = apply_point(t, point2(1.0, 1.0));
+    let comp: bool = p.x == 3.0 && p.y == 3.0;
+    let back: bool = match inverse(t) {
+        Inv2.Value { inv } => point_approx(apply_point(inv, p), point2(1.0, 1.0), 0.000000000001, 0.0),
+        Inv2.Singular => false,
+    };
+    let sing: bool = match inverse(scale(0.0, 1.0)) {
+        Inv2.Value { inv } => inv.m00 != inv.m00,
+        Inv2.Singular => true,
+    };
+    return from_assertion(equals_bool(true, comp && back && sing, 3023));
+}
+
+// --- generative properties ---
+
+test translation_round_trip_property() -> (result: TestResult) {
+    let px: i64 = (replay(51, 0, 2000001) as i64) - 1000000;
+    let py: i64 = (replay(51, 1, 2000001) as i64) - 1000000;
+    let vx: i64 = (replay(51, 2, 2001) as i64) - 1000;
+    let vy: i64 = (replay(51, 3, 2001) as i64) - 1000;
+    let p: Point2 = point2(px as f64, py as f64);
+    let v: Vec2 = vec2(vx as f64, vy as f64);
+    let back: Point2 = add_point_vec(add_point_vec(p, v), vec_neg(v));
+    return from_assertion(equals_bool(true, back.x == p.x && back.y == p.y, 3024));
+}
+
+test distance_symmetric_property() -> (result: TestResult) {
+    let ax: i64 = (replay(52, 0, 2000001) as i64) - 1000000;
+    let ay: i64 = (replay(52, 1, 2000001) as i64) - 1000000;
+    let bx: i64 = (replay(52, 2, 2000001) as i64) - 1000000;
+    let by: i64 = (replay(52, 3, 2000001) as i64) - 1000000;
+    let a: Point2 = point2(ax as f64, ay as f64);
+    let b: Point2 = point2(bx as f64, by as f64);
+    let sym: bool = distance2(a, b) == distance2(b, a);
+    let nonneg: bool = distance2(a, b) >= 0.0;
+    return from_assertion(equals_bool(true, sym && nonneg, 3025));
+}

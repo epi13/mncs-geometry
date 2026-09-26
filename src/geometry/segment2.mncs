@@ -1,0 +1,208 @@
+mncs 0.18;
+
+// mncs.geometry.segment2.v1 — directed segments, orientation, and
+// segment intersection over f64.
+//
+// Orientation is the exact sign of the cross product of edge vectors:
+// counterclockwise, clockwise, or collinear. No epsilon participates,
+// so near-degenerate configurations classify by their computed sign
+// rather than by an arbitrary tolerance band (see the
+// near-degenerate native test for the documented behavior).
+//
+// Segment intersection classifies richly: disjoint, a single point
+// (crossing or endpoint touch), or a collinear overlap segment.
+// A degenerate (zero-length) segment intersects as the point it is.
+
+module mncs.geometry.segment2.v1;
+
+use mncs.geometry.point2;
+use mncs.numerics.scalar_float;
+
+record Segment2 { a: Point2, b: Point2 }
+
+// Orientation of the turn a -> b -> c.
+enum Orient { Ccw, Cw, Collinear }
+
+enum SegIntersect {
+    None,
+    Point { p: Point2 },
+    Overlap { a: Point2, b: Point2 },
+}
+
+fn segment(a: Point2, b: Point2) -> (result: Segment2) {
+    return Segment2 { a: a, b: b };
+}
+
+fn is_degenerate(s: Segment2) -> (result: bool) {
+    return s.a.x == s.b.x && s.a.y == s.b.y;
+}
+
+fn orient(a: Point2, b: Point2, c: Point2) -> (result: Orient) {
+    let ab: Vec2 = sub_points(b, a);
+    let ac: Vec2 = sub_points(c, a);
+    let z: f64 = cross(ab, ac);
+    if z > 0.0 {
+        return Orient.Ccw;
+    }
+    if z < 0.0 {
+        return Orient.Cw;
+    }
+    return Orient.Collinear;
+}
+
+// True when p lies on the closed segment ab (exact arithmetic;
+// callers needing tolerance bands build them from distance
+// predicates instead of widening this one).
+fn on_segment(a: Point2, b: Point2, p: Point2) -> (result: bool) {
+    let within_x: bool = fmin(a.x, b.x) <= p.x && p.x <= fmax(a.x, b.x);
+    let within_y: bool = fmin(a.y, b.y) <= p.y && p.y <= fmax(a.y, b.y);
+    return within_x && within_y;
+}
+
+fn seg_direction(s: Segment2) -> (result: Vec2) {
+    return sub_points(s.b, s.a);
+}
+
+fn segment_translate(s: Segment2, v: Vec2) -> (result: Segment2) {
+    return Segment2 { a: add_point_vec(s.a, v), b: add_point_vec(s.b, v) };
+}
+
+// Squared distance from p to the closed segment ab (exact ops;
+// the degenerate segment measures to its single point).
+fn point_segment_distance2(a: Point2, b: Point2, p: Point2) -> (result: f64) {
+    let ab: Vec2 = sub_points(b, a);
+    let denom: f64 = dot(ab, ab);
+    if denom == 0.0 {
+        return distance2(a, p);
+    }
+    let ap: Vec2 = sub_points(p, a);
+    let t: f64 = dot(ap, ab) / denom;
+    let tc: f64 = fmin(1.0, fmax(0.0, t));
+    let proj: Point2 = add_point_vec(a, vec_scale(ab, tc));
+    return distance2(proj, p);
+}
+
+// True when orientations strictly straddle (proper crossing side).
+fn straddles(x: Orient, y: Orient) -> (result: bool) {
+    return match x {
+        Orient.Ccw => match y {
+            Orient.Cw => true,
+            Orient.Ccw => false,
+            Orient.Collinear => false,
+        },
+        Orient.Cw => match y {
+            Orient.Ccw => true,
+            Orient.Cw => false,
+            Orient.Collinear => false,
+        },
+        Orient.Collinear => false,
+    };
+}
+
+// True when orientation o is Collinear and p lies on ab.
+fn touches(o: Orient, a: Point2, b: Point2, p: Point2) -> (result: bool) {
+    return match o {
+        Orient.Collinear => on_segment(a, b, p),
+        Orient.Ccw => false,
+        Orient.Cw => false,
+    };
+}
+
+// True when the orientation is Collinear.
+fn is_collinear(o: Orient) -> (result: bool) {
+    return match o {
+        Orient.Collinear => true,
+        Orient.Ccw => false,
+        Orient.Cw => false,
+    };
+}
+
+fn seg_intersect(s: Segment2, t: Segment2) -> (result: SegIntersect) {
+    // Degenerate inputs intersect as points.
+    if is_degenerate(s) {
+        return seg_point_case(s.a, t);
+    }
+    if is_degenerate(t) {
+        return seg_point_case(t.a, s);
+    }
+    let o1: Orient = orient(s.a, s.b, t.a);
+    let o2: Orient = orient(s.a, s.b, t.b);
+    let o3: Orient = orient(t.a, t.b, s.a);
+    let o4: Orient = orient(t.a, t.b, s.b);
+    if straddles(o1, o2) && straddles(o3, o4) {
+        return SegIntersect.Point { p: crossing_point(s, t) };
+    }
+    // Collinear configurations route to the overlap computation,
+    // which reports touch (Point), overlap (Overlap), or disjoint
+    // (None) from the projected interval — never a bare endpoint.
+    if is_collinear(o1) && is_collinear(o2) {
+        return collinear_overlap(s, t);
+    }
+    // Remaining touches are genuine endpoint contacts.
+    if touches(o1, s.a, s.b, t.a) {
+        return SegIntersect.Point { p: t.a };
+    }
+    if touches(o2, s.a, s.b, t.b) {
+        return SegIntersect.Point { p: t.b };
+    }
+    if touches(o3, t.a, t.b, s.a) {
+        return SegIntersect.Point { p: s.a };
+    }
+    if touches(o4, t.a, t.b, s.b) {
+        return SegIntersect.Point { p: s.b };
+    }
+    return SegIntersect.None;
+}
+
+// A degenerate segment meets t exactly when its point lies on t.
+fn seg_point_case(p: Point2, t: Segment2) -> (result: SegIntersect) {
+    let ab: Vec2 = sub_points(t.b, t.a);
+    let ap: Vec2 = sub_points(p, t.a);
+    if cross(ab, ap) == 0.0 && on_segment(t.a, t.b, p) {
+        return SegIntersect.Point { p: p };
+    }
+    return SegIntersect.None;
+}
+
+// Intersection point of two properly crossing segments, solved by
+// Cramer's rule on the 2x2 edge system (exact ops on the inputs).
+fn crossing_point(s: Segment2, t: Segment2) -> (result: Point2) {
+    let r: Vec2 = sub_points(s.b, s.a);
+    let u: Vec2 = sub_points(t.b, t.a);
+    let denom: f64 = cross(r, u);
+    let w: Vec2 = sub_points(t.a, s.a);
+    let lambda: f64 = cross(w, u) / denom;
+    return add_point_vec(s.a, vec_scale(r, lambda));
+}
+
+// Projection parameter of p onto the line through origin with
+// direction d (caller guarantees denom != 0).
+fn proj_param(origin: Point2, d: Vec2, denom: f64, p: Point2) -> (result: f64) {
+    return dot(sub_points(p, origin), d) / denom;
+}
+
+// Collinear overlap of s and t: the overlap endpoints are the inner
+// pair of the four projected parameters, clamped to s.
+fn collinear_overlap(s: Segment2, t: Segment2) -> (result: SegIntersect) {
+    let d: Vec2 = sub_points(s.b, s.a);
+    let denom: f64 = dot(d, d);
+    // A zero denominator cannot happen here (callers filter
+    // degenerate directions), but division must never be reachable
+    // on it: fall back to None rather than producing a NaN.
+    if denom == 0.0 {
+        return SegIntersect.None;
+    }
+    let tt0: f64 = proj_param(s.a, d, denom, t.a);
+    let tt1: f64 = proj_param(s.a, d, denom, t.b);
+    let lo: f64 = fmax(0.0, fmin(tt0, tt1));
+    let hi: f64 = fmin(1.0, fmax(tt0, tt1));
+    if lo > hi {
+        return SegIntersect.None;
+    }
+    let pa: Point2 = add_point_vec(s.a, vec_scale(d, lo));
+    let pb: Point2 = add_point_vec(s.a, vec_scale(d, hi));
+    if pa.x == pb.x && pa.y == pb.y {
+        return SegIntersect.Point { p: pa };
+    }
+    return SegIntersect.Overlap { a: pa, b: pb };
+}

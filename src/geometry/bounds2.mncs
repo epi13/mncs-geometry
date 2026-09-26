@@ -1,0 +1,66 @@
+mncs 0.18;
+
+// mncs.geometry.bounds2.v1 — axis-aligned bounding boxes over f64.
+//
+// Emptiness is structural (`OptBounds.Empty`), never a min > max
+// record: `make_bounds` validates ordering at construction, so a
+// `Bounds2` value always satisfies lo <= hi on both axes.
+// Containment is boundary-inclusive. All operations are exact.
+
+module mncs.geometry.bounds2.v1;
+
+use mncs.geometry.point2;
+use mncs.numerics.scalar_float;
+
+record Bounds2 { lo: Point2, hi: Point2 }
+
+// An optional box: Empty is a first-class value, not a degenerate box.
+enum OptBounds { Empty, Box { bounds: Bounds2 } }
+
+fn make_bounds(lo: Point2, hi: Point2) -> (result: OptBounds) {
+    if lo.x > hi.x {
+        return OptBounds.Empty;
+    }
+    if lo.y > hi.y {
+        return OptBounds.Empty;
+    }
+    return OptBounds.Box { bounds: Bounds2 { lo: lo, hi: hi } };
+}
+
+fn point_bounds(p: Point2) -> (result: Bounds2) {
+    return Bounds2 { lo: p, hi: p };
+}
+
+fn contains(b: Bounds2, p: Point2) -> (result: bool) {
+    let in_x: bool = b.lo.x <= p.x && p.x <= b.hi.x;
+    let in_y: bool = b.lo.y <= p.y && p.y <= b.hi.y;
+    return in_x && in_y;
+}
+
+fn bounds_union(a: Bounds2, b: Bounds2) -> (result: Bounds2) {
+    let lo: Point2 = point2(fmin(a.lo.x, b.lo.x), fmin(a.lo.y, b.lo.y));
+    let hi: Point2 = point2(fmax(a.hi.x, b.hi.x), fmax(a.hi.y, b.hi.y));
+    return Bounds2 { lo: lo, hi: hi };
+}
+
+fn bounds_intersect(a: Bounds2, b: Bounds2) -> (result: OptBounds) {
+    let lo: Point2 = point2(fmax(a.lo.x, b.lo.x), fmax(a.lo.y, b.lo.y));
+    let hi: Point2 = point2(fmin(a.hi.x, b.hi.x), fmin(a.hi.y, b.hi.y));
+    return make_bounds(lo, hi);
+}
+
+fn bounds_area(b: Bounds2) -> (result: f64) {
+    return (b.hi.x - b.lo.x) * (b.hi.y - b.lo.y);
+}
+
+fn bounds_center(b: Bounds2) -> (result: Point2) {
+    return point2(0.5 * (b.lo.x + b.hi.x), 0.5 * (b.lo.y + b.hi.y));
+}
+
+fn bounds_extent(b: Bounds2) -> (result: Vec2) {
+    return sub_points(b.hi, b.lo);
+}
+
+fn bounds_translate(b: Bounds2, v: Vec2) -> (result: Bounds2) {
+    return Bounds2 { lo: add_point_vec(b.lo, v), hi: add_point_vec(b.hi, v) };
+}

@@ -1,0 +1,106 @@
+mncs 0.18;
+
+// mncs.geometry.point2.v1 — 2D points and displacement vectors over f64.
+//
+// A `Point2` is a location; a `Vec2` is a displacement. They share
+// coordinates but not semantics: point - point is a vector,
+// point + vector is a point, and point + point is intentionally
+// unsupported (there is no such function to call).
+//
+// Exactness: addition, subtraction, scaling, dot/cross products,
+// length-squared, and distance-squared use only exact binary64
+// operations. Length, normalization, and approximate comparison go
+// through `mncs.numerics.scalar_float` with caller-visible
+// tolerances — geometry owns no hidden epsilon.
+
+module mncs.geometry.point2.v1;
+
+use mncs.numerics.scalar_float;
+
+record Point2 { x: f64, y: f64 }
+
+record Vec2 { x: f64, y: f64 }
+
+// Outcome of normalizing a vector: a zero vector has no direction.
+enum Norm2 { Value { vec: Vec2 }, Degenerate }
+
+fn point2(x: f64, y: f64) -> (result: Point2) {
+    return Point2 { x: x, y: y };
+}
+
+fn vec2(x: f64, y: f64) -> (result: Vec2) {
+    return Vec2 { x: x, y: y };
+}
+
+fn zero_vec() -> (result: Vec2) {
+    return Vec2 { x: 0.0, y: 0.0 };
+}
+
+fn vec_add(a: Vec2, b: Vec2) -> (result: Vec2) {
+    return Vec2 { x: a.x + b.x, y: a.y + b.y };
+}
+
+fn vec_sub(a: Vec2, b: Vec2) -> (result: Vec2) {
+    return Vec2 { x: a.x - b.x, y: a.y - b.y };
+}
+
+fn vec_neg(v: Vec2) -> (result: Vec2) {
+    return Vec2 { x: 0.0 - v.x, y: 0.0 - v.y };
+}
+
+fn vec_scale(v: Vec2, s: f64) -> (result: Vec2) {
+    return Vec2 { x: v.x * s, y: v.y * s };
+}
+
+// Displacement from a to b.
+fn sub_points(b: Point2, a: Point2) -> (result: Vec2) {
+    return Vec2 { x: b.x - a.x, y: b.y - a.y };
+}
+
+// Translate a point by a displacement.
+fn add_point_vec(p: Point2, v: Vec2) -> (result: Point2) {
+    return Point2 { x: p.x + v.x, y: p.y + v.y };
+}
+
+fn dot(a: Vec2, b: Vec2) -> (result: f64) {
+    return a.x * b.x + a.y * b.y;
+}
+
+// Scalar z-component of the 3D cross product of two planar vectors.
+// The sign is the exact orientation predicate for the domain.
+fn cross(a: Vec2, b: Vec2) -> (result: f64) {
+    return a.x * b.y - a.y * b.x;
+}
+
+fn length2(v: Vec2) -> (result: f64) {
+    return dot(v, v);
+}
+
+fn distance2(a: Point2, b: Point2) -> (result: f64) {
+    let d: Vec2 = sub_points(b, a);
+    return length2(d);
+}
+
+fn length(v: Vec2) -> (result: f64) {
+    return sqrt_value(length2(v));
+}
+
+fn normalize(v: Vec2) -> (result: Norm2) {
+    let l2: f64 = length2(v);
+    if l2 == 0.0 {
+        return Norm2.Degenerate;
+    }
+    let inv: f64 = 1.0 / sqrt_value(l2);
+    return Norm2.Value { vec: vec_scale(v, inv) };
+}
+
+// Approximate comparison with caller-visible tolerances (absolute
+// plus relative, as in `mncs.numerics.scalar_float.approx`).
+// Exact points compare with ==; this is for computed geometry.
+fn point_approx(a: Point2, b: Point2, abs_tol: f64, rel_tol: f64) -> (result: bool) {
+    return approx(a.x, b.x, abs_tol, rel_tol) && approx(a.y, b.y, abs_tol, rel_tol);
+}
+
+fn vec_approx(a: Vec2, b: Vec2, abs_tol: f64, rel_tol: f64) -> (result: bool) {
+    return approx(a.x, b.x, abs_tol, rel_tol) && approx(a.y, b.y, abs_tol, rel_tol);
+}
