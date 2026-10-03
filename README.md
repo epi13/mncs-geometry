@@ -1,5 +1,8 @@
 # mncs-geometry
 
+<!-- MNCS:generated:begin -->
+<!-- MNCS:generated:end -->
+
 Foundational computational geometry for MNCS, realized directly in
 the current language.
 
