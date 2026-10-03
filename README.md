@@ -1,6 +1,19 @@
 # mncs-geometry
 
 <!-- MNCS:generated:begin -->
+## Project entry
+
+Foundational computational geometry for MNCS in the current language: 2D primitives with explicit exact/approximate contracts, where degenerate cases are first-class values with defined semantics.
+
+```bash
+python3 scripts/run_tests.py
+```
+
+Declared capabilities (declarations do not establish execution health):
+
+- `geometry-2d/0.1` — mncs-library (experimental)
+
+Semantic sources and ownership: `.mncs/projections.json`.
 <!-- MNCS:generated:end -->
 
 Foundational computational geometry for MNCS, realized directly in
